@@ -1,0 +1,26 @@
+{
+  "background_color": "#ffffff",
+  "dir": "ltr",
+  "display": "standalone",
+  "name": "ruzgaremin.github.io",
+  "orientation": "any",
+  "scope": "/",
+  "short_name": "ruzgaremin.github.io",
+  "start_url": "/",
+  "theme_color": "#ffffff",
+  "icons": [
+    {
+      "src": "https://ruzgaremin.github.io/MuZik/1.png",
+      "type": "image/png",
+      "sizes": "1024x1024",
+      "isSquare": true,
+      "isPng": true,
+      "isWebp": false,
+      "isJpg": false,
+      "width": 1024,
+      "is512x512": false,
+      "is256x256": false,
+      "is192x192": false
+    }
+  ]
+}
