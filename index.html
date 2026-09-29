@@ -346,6 +346,25 @@
   }
   .row.playing .btn:hover { background: #eaeaea; border-color: #eaeaea; }
 
+  /* ---------- Missing-file state ---------- */
+  .row.missing .meta .t,
+  .row.missing .meta .a { opacity: .35; }
+  .row.missing .time { opacity: .35; }
+  .row.missing .btn { opacity: .35; cursor: not-allowed; }
+  .row.missing .btn:hover { color: var(--dim); border-color: var(--line-hi); }
+  .row.missing::after {
+    content: "missing";
+    position: absolute;
+    right: clamp(60px, 9vh, 80px);
+    top: 50%;
+    transform: translateY(-50%);
+    font-size: 10px;
+    letter-spacing: 1.2px;
+    text-transform: uppercase;
+    color: var(--dimmer);
+    pointer-events: none;
+  }
+
   /* ---------- Empty state ---------- */
   .empty {
     flex: 1;
@@ -376,6 +395,7 @@
     .meta { max-width: 44%; }
     .leader { min-width: 44px; }
     .row { gap: 10px; }
+    .row.missing::after { display: none; }
   }
 
   @media (max-width: 400px) {
@@ -412,14 +432,21 @@
   const $ = (id) => document.getElementById(id);
 
   /* ============================================================
-     PLACEHOLDER TRACKS — delete this whole block to start empty
+     PRESET TRACKS
+     ------------------------------------------------------------
+     Each entry pulls an mp3 from this same folder.
+     Change the `file:` name, `title:` or `artist:` to whatever
+     you want — or reorder / add / remove lines.
+
+     Files must sit next to index.html:
+       1.mp3  2.mp3  3.mp3  4.mp3  5.mp3
      ============================================================ */
-  const DEMO_TRACKS = [
-    { title: 'Midnight Drive',  artist: 'Neon Coast',   duration: 222 },
-    { title: 'Paper Lanterns',  artist: 'Aiko Mori',    duration: 255 },
-    { title: 'Static Bloom',    artist: 'Velvet Hour',  duration: 178 },
-    { title: 'Low Tide',        artist: 'Cassette Sun', duration: 307 },
-    { title: 'Glass Garden',    artist: 'Ivory Weeks',  duration: 211 },
+  const PRESET_TRACKS = [
+    { file: '1.mp3', title: 'CUBErt', artist: 'System Of A Down'   },
+    { file: '2.mp3', title: 'Duality', artist: 'Slipknot'    },
+    { file: '3.mp3', title: 'Yine',   artist: 'Kurban'  },
+    { file: '4.mp3', title: 'Kafakafesi',       artist: 'Çilekeş' },
+    { file: '5.mp3', title: 'Kara Mizah',   artist: 'Çilekeş'  },
   ];
   /* ============================================================ */
 
@@ -441,71 +468,12 @@
     shuffle: false, repeat: false, scrubbing: false,
   };
   let rows = [];
-
-  const clock = { base: 0, t0: 0, running: false };
   let rafId = null;
 
-  const clockTime = () =>
-    clock.running ? clock.base + (performance.now() - clock.t0) / 1000 : clock.base;
+  /* ---------- helpers ---------- */
 
-  function clockStart(from = 0) {
-    clock.base = from;
-    clock.t0 = performance.now();
-    clock.running = true;
-  }
-
-  function clockStop() {
-    if (clock.running) clock.base = clockTime();
-    clock.running = false;
-    cancelAnimationFrame(rafId);
-    rafId = null;
-  }
-
-  function clockSeek(to) {
-    clock.base = to;
-    clock.t0 = performance.now();
-  }
-
-  function startTick() {
-    cancelAnimationFrame(rafId);
-    const step = () => {
-      const t = state.tracks[state.current];
-      if (!t || !state.playing) { rafId = null; return; }
-      if (t.demo && clockTime() >= t.duration) { next(true); return; }
-      syncProgress();
-      rafId = requestAnimationFrame(step);
-    };
-    rafId = requestAnimationFrame(step);
-  }
-
-  function currentTime() {
-    const t = state.tracks[state.current];
-    if (!t) return 0;
-    return t.demo ? clockTime() : audio.currentTime;
-  }
-
-  function currentDuration() {
-    const t = state.tracks[state.current];
-    if (!t) return 0;
-    if (t.demo) return t.duration;
-    return isFinite(audio.duration) ? audio.duration : 0;
-  }
-
-  function seekTo(v) {
-    const t = state.tracks[state.current];
-    if (!t) return;
-    const d = currentDuration();
-    v = Math.max(0, d ? Math.min(d, v) : v);
-    if (t.demo) clockSeek(v);
-    else if (isFinite(audio.duration)) audio.currentTime = v;
-    syncProgress();
-  }
-
-  function seekBy(delta) {
-    const d = currentDuration();
-    if (!d) return;
-    seekTo(currentTime() + delta);
-  }
+  const currentTime = () => audio.currentTime || 0;
+  const currentDuration = () => (isFinite(audio.duration) ? audio.duration : 0);
 
   const fmt = (s) => {
     if (!isFinite(s) || s < 0) return '0:00';
@@ -522,13 +490,75 @@
     return { artist: 'Unknown artist', title: base.trim() || filename };
   }
 
-  function loadDemos() {
-    for (const d of DEMO_TRACKS) {
-      state.tracks.push({
-        url: null, title: d.title, artist: d.artist,
-        duration: d.duration, demo: true,
-      });
+  function seekTo(v) {
+    if (!isFinite(audio.duration)) return;
+    audio.currentTime = Math.max(0, Math.min(audio.duration, v));
+    syncProgress();
+  }
+
+  function seekBy(delta) {
+    if (!isFinite(audio.duration)) return;
+    seekTo(currentTime() + delta);
+  }
+
+  /* ---------- smooth progress tick (rAF, not timeupdate's 4 Hz) ---------- */
+  function startTick() {
+    cancelAnimationFrame(rafId);
+    const step = () => {
+      if (!state.playing) { rafId = null; return; }
+      syncProgress();
+      rafId = requestAnimationFrame(step);
+    };
+    rafId = requestAnimationFrame(step);
+  }
+
+  function stopTick() {
+    cancelAnimationFrame(rafId);
+    rafId = null;
+  }
+
+  /* ---------- build list ---------- */
+
+  function loadPresets() {
+    for (const p of PRESET_TRACKS) {
+      const track = {
+        url: p.file,
+        title: p.title,
+        artist: p.artist,
+        duration: null,
+        missing: false,
+      };
+      state.tracks.push(track);
+      probeDuration(track);
     }
+  }
+
+  function probeDuration(track) {
+    const probe = new Audio();
+    probe.preload = 'metadata';
+
+    probe.addEventListener('loadedmetadata', () => {
+      track.duration = probe.duration;
+      const i = state.tracks.indexOf(track);
+      if (i > -1 && rows[i]) {
+        rows[i].scrub.max = probe.duration;
+        if (!(i === state.current && state.playing)) {
+          rows[i].time.textContent = fmt(probe.duration);
+        }
+      }
+    }, { once: true });
+
+    probe.addEventListener('error', () => {
+      track.missing = true;
+      track.duration = null;
+      const i = state.tracks.indexOf(track);
+      if (i > -1 && rows[i]) {
+        rows[i].li.classList.add('missing');
+        rows[i].time.textContent = '--:--';
+      }
+    }, { once: true });
+
+    probe.src = track.url;
   }
 
   function addFiles(fileList) {
@@ -542,29 +572,17 @@
 
     for (const file of files) {
       const { artist, title } = parseName(file.name);
-      const track = { url: URL.createObjectURL(file), title, artist, duration: null, demo: false };
+      const track = {
+        url: URL.createObjectURL(file),
+        title, artist,
+        duration: null, missing: false,
+      };
       state.tracks.push(track);
       probeDuration(track);
     }
 
     render();
     if (wasEmpty) play(0);
-  }
-
-  function probeDuration(track) {
-    const probe = new Audio();
-    probe.preload = 'metadata';
-    probe.addEventListener('loadedmetadata', () => {
-      track.duration = probe.duration;
-      const i = state.tracks.indexOf(track);
-      if (i > -1 && rows[i]) {
-        if (!(i === state.current && state.playing)) {
-          rows[i].time.textContent = fmt(probe.duration);
-        }
-        rows[i].scrub.max = probe.duration;
-      }
-    }, { once: true });
-    probe.src = track.url;
   }
 
   function render() {
@@ -582,7 +600,7 @@
 
     rows = state.tracks.map((t, i) => {
       const li = document.createElement('li');
-      li.className = 'row';
+      li.className = 'row' + (t.missing ? ' missing' : '');
       li.dataset.i = i;
 
       const fill = document.createElement('div');
@@ -646,6 +664,8 @@
     syncProgress();
   }
 
+  /* ---------- sync visuals ---------- */
+
   function syncRows() {
     rows.forEach((r, i) => {
       const isCurrent = i === state.current;
@@ -707,60 +727,30 @@
       if (!state.scrubbing) r.scrub.value = 0;
       r.scrub.style.setProperty('--p', '0%');
       r.sc.textContent = '0:00';
-      const dur = state.tracks[state.current].duration;
-      if (dur) {
-        r.time.textContent = fmt(dur);
-        r.scrub.max = dur;
-      }
     }
   }
+
+  /* ---------- playback ---------- */
 
   function play(i) {
     if (i < 0 || i >= state.tracks.length) return;
     const t = state.tracks[i];
-    if (!t) return;
+    if (!t || t.missing) return;
 
-    clockStop();
     state.scrubbing = false;
     state.current = i;
-
-    if (t.demo) {
-      audio.pause();
-      audio.removeAttribute('src');
-      clockStart(0);
-      state.playing = true;
-      syncRows();
-      syncProgress();
-      startTick();
-    } else {
-      audio.src = t.url;
-      audio.play().catch(() => {});
-    }
+    audio.src = t.url;
+    audio.play().catch(() => {});
   }
 
   function toggle(i) {
     const t = state.tracks[i];
-    if (!t) return;
+    if (!t || t.missing) return;
 
     if (i === state.current && state.playing) {
-      if (t.demo) {
-        clockStop();
-        state.playing = false;
-        syncRows();
-        syncProgress();
-      } else {
-        audio.pause();
-      }
+      audio.pause();
     } else if (i === state.current) {
-      if (t.demo) {
-        clockStart(clock.base);
-        state.playing = true;
-        syncRows();
-        syncProgress();
-        startTick();
-      } else {
-        audio.play().catch(() => {});
-      }
+      audio.play().catch(() => {});
     } else {
       play(i);
     }
@@ -779,9 +769,9 @@
     if (state.current + 1 < n) play(state.current + 1);
     else if (state.repeat || !auto) play(0);
     else {
-      clockStop();
       state.playing = false;
       state.scrubbing = false;
+      stopTick();
       syncRows();
       syncProgress();
     }
@@ -794,10 +784,9 @@
     play(state.current > 0 ? state.current - 1 : n - 1);
   }
 
-  const isDemo = () => state.tracks[state.current]?.demo === true;
+  /* ---------- audio events ---------- */
 
   audio.addEventListener('play', () => {
-    if (isDemo()) return;
     state.playing = true;
     syncRows();
     syncProgress();
@@ -805,13 +794,30 @@
   });
 
   audio.addEventListener('pause', () => {
-    if (isDemo()) return;
     state.playing = false;
+    stopTick();
     syncRows();
     syncProgress();
   });
 
-  audio.addEventListener('ended', () => { if (!isDemo()) next(true); });
+  audio.addEventListener('ended', () => next(true));
+
+  audio.addEventListener('error', () => {
+    const t = state.tracks[state.current];
+    if (!t) return;
+    t.missing = true;
+    const r = rows[state.current];
+    if (r) {
+      r.li.classList.add('missing');
+      r.time.textContent = '--:--';
+    }
+    state.playing = false;
+    stopTick();
+    syncRows();
+    syncProgress();
+  });
+
+  /* ---------- interactions ---------- */
 
   el.list.addEventListener('click', (e) => {
     if (e.target.closest('.scrubber')) return;
@@ -875,7 +881,8 @@
     }
   });
 
-  loadDemos();
+  /* ---------- init ---------- */
+  loadPresets();
   render();
 })();
 </script>
